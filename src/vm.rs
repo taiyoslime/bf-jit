@@ -41,20 +41,20 @@ impl VM {
         while self.pc < program.bytecodes.len() {
             match program.bytecodes[self.pc] {
                 Inst::MOVPTR(v) => {
-                    let mut mem_ptr_n = self.mem_ptr as isize + v;
-
                     // https://esolangs.org/wiki/Brainfuck#Memory
-                    if mem_ptr_n < 0 {
-                        mem_ptr_n = mem_ptr_n % MEMSIZE as isize + MEMSIZE as isize;
-                    }
-                    if mem_ptr_n >= MEMSIZE as isize {
-                        mem_ptr_n %= MEMSIZE as isize;
-                    }
-
-                    self.mem_ptr = mem_ptr_n as usize;
+                    self.mem_ptr = wrap(self.mem_ptr as isize + v, MEMSIZE);
                 }
                 Inst::ADD(v) => {
                     self.mem[self.mem_ptr] = self.mem[self.mem_ptr].wrapping_add(v as u8);
+                }
+                Inst::SETZERO => {
+                    self.mem[self.mem_ptr] = 0;
+                }
+                Inst::MULINTO(coef, offset) => {
+                    let mem_ptr_to = wrap(self.mem_ptr as isize + offset, MEMSIZE);
+                    self.mem[mem_ptr_to] = self.mem[mem_ptr_to]
+                        .wrapping_add((coef * self.mem[self.mem_ptr] as isize) as u8);
+                    self.mem[self.mem_ptr] = 0;
                 }
                 Inst::PUTC => {
                     let _ = writer.write(&self.mem[self.mem_ptr..(self.mem_ptr + 1)]);
@@ -82,6 +82,16 @@ impl VM {
         }
         Ok(())
     }
+}
+
+fn wrap(v: isize, ceil: usize) -> usize {
+    if v < 0 {
+        return (v % ceil as isize + ceil as isize) as usize;
+    }
+    if v >= ceil as isize {
+        return (v % ceil as isize) as usize;
+    }
+    v as usize
 }
 
 #[derive(Debug, Clone, PartialEq)]

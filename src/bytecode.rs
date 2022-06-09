@@ -6,6 +6,8 @@ mod optimize;
 pub enum Inst {
     MOVPTR(isize),
     ADD(isize),
+    SETZERO,
+    MULINTO(isize, isize), // (coef, offset)
     PUTC,
     GETC,
     JZ(usize),
@@ -72,6 +74,38 @@ pub fn compile(tokens: &Vec<Token>) -> Result<Vec<Inst>, CompileError> {
             }
             Token::RSQB => {
                 if let Some((saved_addr, _)) = stack.pop() {
+                    // replase "[-]" to SET(0)
+                    if addr >= 2 {
+                        match insts[addr - 2..addr] {
+                            // TODO: other case in v
+                            [Inst::JZ(_), Inst::ADD(v)] if v == -1 || v == 1 => {
+                                insts.pop();
+                                insts.pop();
+                                insts.push(Inst::SETZERO);
+                                addr -= 1;
+                                continue;
+                            }
+                            _ => (),
+                        }
+                    }
+
+                    if addr >= 5 {
+                        match insts[addr - 5..addr] {
+                            [Inst::JZ(_), Inst::ADD(v0), Inst::MOVPTR(p0), Inst::ADD(v1), Inst::MOVPTR(p1)]
+                            | [Inst::JZ(_), Inst::MOVPTR(p0), Inst::ADD(v1), Inst::MOVPTR(p1), Inst::ADD(v0)]
+                                if p0.abs() == p1.abs() && p0 != p1 && v0 == -1 =>
+                            {
+                                for _ in 0..5 {
+                                    insts.pop();
+                                }
+                                insts.push(Inst::MULINTO(v1, p0));
+                                addr -= 4;
+                                continue;
+                            }
+                            _ => (),
+                        }
+                    }
+
                     insts[saved_addr] = Inst::JZ(addr + 1);
                     insts.push(Inst::JNZ(saved_addr + 1));
                     addr += 1;
@@ -88,9 +122,6 @@ pub fn compile(tokens: &Vec<Token>) -> Result<Vec<Inst>, CompileError> {
         return Err(CompileError::LSQBMismatch(pos));
     }
 
-
-    
-
     Ok(insts)
 }
 
@@ -105,7 +136,7 @@ impl fmt::Display for CompileError {
         use self::CompileError::*;
         match self {
             // TODO
-            LSQBMismatch(pos) => write!(f, "unclosed '[' at pos {}", pos), 
+            LSQBMismatch(pos) => write!(f, "unclosed '[' at pos {}", pos),
             RSQBMismatch(pos) => write!(f, "unexpected ']' at pos {}", pos),
         }
     }
@@ -125,19 +156,7 @@ mod tests {
         ];
         let insts = compile(&tokens);
         assert_eq!(
-            vec![
-                MOVPTR(2),
-                JZ(4),
-                ADD(-1),
-                JNZ(2),
-                MOVPTR(-2),
-                JZ(11),
-                ADD(-1),
-                MOVPTR(2),
-                ADD(1),
-                MOVPTR(-2),
-                JNZ(6)
-            ],
+            vec![MOVPTR(2), SETZERO, MOVPTR(-2), MULINTO(1, 2)],
             insts.unwrap()
         );
     }
