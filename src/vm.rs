@@ -84,6 +84,7 @@ impl VM {
     }
 }
 
+#[inline(always)]
 fn wrap(v: isize, ceil: usize) -> usize {
     if v < 0 {
         return (v % ceil as isize + ceil as isize) as usize;
