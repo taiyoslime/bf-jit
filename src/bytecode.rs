@@ -136,8 +136,8 @@ impl fmt::Display for CompileError {
         use self::CompileError::*;
         match self {
             // TODO
-            LSQBMismatch(pos) => write!(f, "unclosed '[' at pos {}", pos),
-            RSQBMismatch(pos) => write!(f, "unexpected ']' at pos {}", pos),
+            LSQBMismatch(pos) => write!(f, "unclosed '[' at pos {pos}"),
+            RSQBMismatch(pos) => write!(f, "unexpected ']' at pos {pos}"),
         }
     }
 }

@@ -22,10 +22,12 @@ fn _main() -> Result<(), Box<dyn error::Error + 'static>> {
     Ok(())
 }
 
-fn main() {
-    _main().unwrap_or_else(|e| {
-        eprintln!("Error: {}" , e);
-        process::exit(1);
-    })
+fn main() -> process::ExitCode {
+    match _main() {
+        Ok(_) => process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            process::ExitCode::FAILURE
+        }
+    }
 }
-
