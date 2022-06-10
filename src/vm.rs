@@ -56,6 +56,11 @@ impl VM {
                         .wrapping_add((coef * self.mem[self.mem_ptr] as isize) as u8);
                     self.mem[self.mem_ptr] = 0;
                 }
+                Inst::FINDZERO(offset) => {
+                    while self.mem[self.mem_ptr] != 0 {
+                        self.mem_ptr = wrap(self.mem_ptr as isize + offset, MEMSIZE);
+                    }
+                }
                 Inst::PUTC => {
                     let _ = writer.write(&self.mem[self.mem_ptr..(self.mem_ptr + 1)]);
                 }
@@ -175,6 +180,17 @@ mod tests {
     }
 
     #[test]
+    fn run_movev() {
+        // "++++++++++>>[-]<<[->>+<<]"
+        let bytecodes = vec![ADD(10), MOVPTR(2), SETZERO, MOVPTR(-2), MULINTO(1, 2)];
+        let mut vm = VM::new();
+        let _ = vm
+            .run(&Program { bytecodes }, &mut "".as_bytes(), &mut vec![])
+            .unwrap();
+        assert_eq!(vm.mem[0..3], [0, 0, 10]);
+    }
+
+    #[test]
     fn run_cat() {
         // ",[.,]"
         // EOF == 0
@@ -206,5 +222,24 @@ mod tests {
             .unwrap();
 
         assert_eq!([vm.mem[0], vm.mem[1], vm.mem[MEMSIZE - 1]], [255, 0, 200]);
+    }
+
+    #[test]
+    fn run_findzero() {
+        let bytecodes = vec![
+            ADD(1),
+            MOVPTR(1),
+            ADD(2),
+            MOVPTR(1),
+            ADD(3),
+            MOVPTR(-2),
+            FINDZERO(1),
+        ];
+        let mut vm = VM::new();
+        let _ = vm
+            .run(&Program { bytecodes }, &mut "".as_bytes(), &mut vec![])
+            .unwrap();
+        assert_eq!(vm.mem[0..4], [1, 2, 3, 0]);
+        assert_eq!(vm.mem_ptr, 3)
     }
 }

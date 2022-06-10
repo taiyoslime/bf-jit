@@ -8,6 +8,7 @@ pub enum Inst {
     ADD(isize),
     SETZERO,
     MULINTO(isize, isize), // (coef, offset)
+    FINDZERO(isize),
     PUTC,
     GETC,
     JZ(usize),
@@ -74,41 +75,41 @@ pub fn compile(tokens: &Vec<Token>) -> Result<Vec<Inst>, CompileError> {
             }
             Token::RSQB => {
                 if let Some((saved_addr, _)) = stack.pop() {
-                    // replase "[-]" to SET(0)
-                    if addr >= 2 {
-                        match insts[addr - 2..addr] {
-                            // TODO: other case in v
-                            [Inst::JZ(_), Inst::ADD(v)] if v == -1 || v == 1 => {
+                    match insts[..] {
+                        // replace [JZ(_), ADD(-1|1), JNZ(_)] (e.g., "[-]")to SETZERO
+                        // TODO: other case in v
+                        [.., Inst::JZ(_), Inst::ADD(v)] if v == -1 || v == 1 => {
+                            insts[addr - 2] = Inst::SETZERO;
+                            insts.pop();
+                            addr -= 1;
+                        }
+
+                        // replace [JZ(_), ADD(-1), MOVPTR(v), ADD(_). MOVPTR(-v), JNZ(_)]
+                        // | [ADD(-1), MOVPTR(v), ADD(_). MOVPTR(-v), JNZ(_)] (e.g., "[->>>+<<<]") to MULINTO
+                        [.., Inst::JZ(_), Inst::ADD(v0), Inst::MOVPTR(p0), Inst::ADD(v1), Inst::MOVPTR(p1)]
+                        | [.., Inst::JZ(_), Inst::MOVPTR(p0), Inst::ADD(v1), Inst::MOVPTR(p1), Inst::ADD(v0)]
+                            if p0.abs() == p1.abs() && p0 != p1 && v0 == -1 =>
+                        {
+                            insts[addr - 5] = Inst::MULINTO(v1, p0);
+                            for _ in 0..4 {
                                 insts.pop();
-                                insts.pop();
-                                insts.push(Inst::SETZERO);
-                                addr -= 1;
-                                continue;
                             }
-                            _ => (),
+                            addr -= 4;
+                        }
+
+                        // replace [JZ(_), MOVPTR(v), JNZ(_)] (e.g., "[>>>>>]") to
+                        [.., Inst::JZ(_), Inst::MOVPTR(v)] => {
+                            insts[addr - 2] = Inst::FINDZERO(v);
+                            insts.pop();
+                            addr -= 1;
+                        }
+
+                        _ => {
+                            insts[saved_addr] = Inst::JZ(addr + 1);
+                            insts.push(Inst::JNZ(saved_addr + 1));
+                            addr += 1;
                         }
                     }
-
-                    if addr >= 5 {
-                        match insts[addr - 5..addr] {
-                            [Inst::JZ(_), Inst::ADD(v0), Inst::MOVPTR(p0), Inst::ADD(v1), Inst::MOVPTR(p1)]
-                            | [Inst::JZ(_), Inst::MOVPTR(p0), Inst::ADD(v1), Inst::MOVPTR(p1), Inst::ADD(v0)]
-                                if p0.abs() == p1.abs() && p0 != p1 && v0 == -1 =>
-                            {
-                                for _ in 0..5 {
-                                    insts.pop();
-                                }
-                                insts.push(Inst::MULINTO(v1, p0));
-                                addr -= 4;
-                                continue;
-                            }
-                            _ => (),
-                        }
-                    }
-
-                    insts[saved_addr] = Inst::JZ(addr + 1);
-                    insts.push(Inst::JNZ(saved_addr + 1));
-                    addr += 1;
                 } else {
                     return Err(CompileError::RSQBMismatch(i));
                 }
@@ -157,6 +158,83 @@ mod tests {
         let insts = compile(&tokens);
         assert_eq!(
             vec![MOVPTR(2), SETZERO, MOVPTR(-2), MULINTO(1, 2)],
+            insts.unwrap()
+        );
+    }
+
+    #[test]
+    fn compile_hello_world_red() {
+        // "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++."
+        let tokens = vec![
+            PLUS, PLUS, PLUS, PLUS, PLUS, PLUS, PLUS, PLUS, LSQB, GT, PLUS, PLUS, PLUS, PLUS, LSQB,
+            GT, PLUS, PLUS, GT, PLUS, PLUS, PLUS, GT, PLUS, PLUS, PLUS, GT, PLUS, LT, LT, LT, LT,
+            MINUS, RSQB, GT, PLUS, GT, PLUS, GT, MINUS, GT, GT, PLUS, LSQB, LT, RSQB, LT, MINUS,
+            RSQB, GT, GT, DOT, GT, MINUS, MINUS, MINUS, DOT, PLUS, PLUS, PLUS, PLUS, PLUS, PLUS,
+            PLUS, DOT, DOT, PLUS, PLUS, PLUS, DOT, GT, GT, DOT, LT, MINUS, DOT, LT, DOT, PLUS,
+            PLUS, PLUS, DOT, MINUS, MINUS, MINUS, MINUS, MINUS, MINUS, DOT, MINUS, MINUS, MINUS,
+            MINUS, MINUS, MINUS, MINUS, MINUS, DOT, GT, GT, PLUS, DOT, GT, PLUS, PLUS, DOT,
+        ];
+        let insts = compile(&tokens);
+        assert_eq!(
+            vec![
+                ADD(8),
+                JZ(28),
+                MOVPTR(1),
+                ADD(4),
+                JZ(16),
+                MOVPTR(1),
+                ADD(2),
+                MOVPTR(1),
+                ADD(3),
+                MOVPTR(1),
+                ADD(3),
+                MOVPTR(1),
+                ADD(1),
+                MOVPTR(-4),
+                ADD(-1),
+                JNZ(5),
+                MOVPTR(1),
+                ADD(1),
+                MOVPTR(1),
+                ADD(1),
+                MOVPTR(1),
+                ADD(-1),
+                MOVPTR(2),
+                ADD(1),
+                FINDZERO(-1),
+                MOVPTR(-1),
+                ADD(-1),
+                JNZ(2),
+                MOVPTR(2),
+                PUTC,
+                MOVPTR(1),
+                ADD(-3),
+                PUTC,
+                ADD(7),
+                PUTC,
+                PUTC,
+                ADD(3),
+                PUTC,
+                MOVPTR(2),
+                PUTC,
+                MOVPTR(-1),
+                ADD(-1),
+                PUTC,
+                MOVPTR(-1),
+                PUTC,
+                ADD(3),
+                PUTC,
+                ADD(-6),
+                PUTC,
+                ADD(-8),
+                PUTC,
+                MOVPTR(2),
+                ADD(1),
+                PUTC,
+                MOVPTR(1),
+                ADD(2),
+                PUTC
+            ],
             insts.unwrap()
         );
     }
