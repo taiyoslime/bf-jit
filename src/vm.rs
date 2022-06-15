@@ -1,9 +1,11 @@
 use crate::bytecode::Inst;
+use crate::jit;
 use std::error;
 use std::fmt;
 use std::io;
 
-const MEMSIZE: usize = 100000;
+pub const MEMSIZE: usize = 100000;
+pub const JIT_EXEC_TH: u8 = 5;
 const EOF: u8 = 0;
 
 pub struct Program {
@@ -36,9 +38,25 @@ impl VM {
         program: &Program,
         reader: &mut R,
         writer: &mut W,
+        enable_jit: bool,
     ) -> Result<(), RuntimeError> {
         let mut buf: [u8; 1] = [0]; // TODO
+        let jit = jit::JIT::new();
+
         while self.pc < program.bytecodes.len() {
+            if enable_jit && self.check_exec_count() > JIT_EXEC_TH {
+                let start = self.pc;
+                // TODO: ループ単位でやる
+                let end = program.bytecodes.len() - 1;
+                let next_mem_ptr: usize;
+                unsafe {
+                    next_mem_ptr =
+                        jit.enter(&program.bytecodes, start, end, &self.mem, self.mem_ptr);
+                }
+                self.mem_ptr = next_mem_ptr;
+                self.pc = end + 1;
+                continue;
+            }
             match program.bytecodes[self.pc] {
                 Inst::MOVPTR(v) => {
                     // https://esolangs.org/wiki/Brainfuck#Memory
@@ -86,6 +104,11 @@ impl VM {
             self.pc += 1;
         }
         Ok(())
+    }
+
+    fn check_exec_count(&mut self) -> u8 {
+        // TODO
+        255
     }
 }
 
@@ -168,7 +191,12 @@ mod tests {
         let mut vm = VM::new();
         let mut output = vec![];
         let _ = vm
-            .run(&Program { bytecodes }, &mut "".as_bytes(), &mut output)
+            .run(
+                &Program { bytecodes },
+                &mut "".as_bytes(),
+                &mut output,
+                false,
+            )
             .unwrap();
         assert_eq!(
             "Hello, World!"
@@ -185,7 +213,12 @@ mod tests {
         let bytecodes = vec![ADD(10), MOVPTR(2), SETZERO, MOVPTR(-2), MULINTO(1, 2)];
         let mut vm = VM::new();
         let _ = vm
-            .run(&Program { bytecodes }, &mut "".as_bytes(), &mut vec![])
+            .run(
+                &Program { bytecodes },
+                &mut "".as_bytes(),
+                &mut vec![],
+                false,
+            )
             .unwrap();
         assert_eq!(vm.mem[0..3], [0, 0, 10]);
     }
@@ -202,7 +235,7 @@ mod tests {
         let mut input = text.as_bytes();
         let mut output = vec![];
         let _ = vm
-            .run(&Program { bytecodes }, &mut input, &mut output)
+            .run(&Program { bytecodes }, &mut input, &mut output, false)
             .unwrap();
         assert_eq!(text.chars().map(|c| c as u8).collect::<Vec<u8>>(), output);
     }
@@ -218,7 +251,12 @@ mod tests {
         ];
         let mut vm = VM::new();
         let _ = vm
-            .run(&Program { bytecodes }, &mut "".as_bytes(), &mut vec![])
+            .run(
+                &Program { bytecodes },
+                &mut "".as_bytes(),
+                &mut vec![],
+                false,
+            )
             .unwrap();
 
         assert_eq!([vm.mem[0], vm.mem[1], vm.mem[MEMSIZE - 1]], [255, 0, 200]);
@@ -237,7 +275,12 @@ mod tests {
         ];
         let mut vm = VM::new();
         let _ = vm
-            .run(&Program { bytecodes }, &mut "".as_bytes(), &mut vec![])
+            .run(
+                &Program { bytecodes },
+                &mut "".as_bytes(),
+                &mut vec![],
+                false,
+            )
             .unwrap();
         assert_eq!(vm.mem[0..4], [1, 2, 3, 0]);
         assert_eq!(vm.mem_ptr, 3)

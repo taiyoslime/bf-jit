@@ -24,6 +24,7 @@ name = "bf_jit"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "libc",
 ]
 
 [[package]]
