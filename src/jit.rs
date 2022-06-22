@@ -1,7 +1,7 @@
 use crate::bytecode::Inst;
 use crate::vm::MEMSIZE;
 use std::arch::asm;
-use std::{error, fmt, mem, ptr};
+use std::{error, fmt, ptr};
 
 use std::collections::BTreeMap;
 
@@ -329,7 +329,6 @@ impl JIT {
         let mut next_mem_ptr;
 
         let mem_start = mem.as_ptr() as usize;
-        let mem_end = mem_start + MEMSIZE;
         let mem_cur = mem_start + mem_ptr;
         let page_top_addr = pages[0].mem as usize;
 

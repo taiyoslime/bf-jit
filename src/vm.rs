@@ -82,7 +82,7 @@ impl VM {
                     let _ = writer.write(&self.mem[self.mem_ptr..(self.mem_ptr + 1)]);
                 }
                 Inst::GETC => {
-                    if let Err(_) = reader.read_exact(&mut buf) {
+                    if reader.read_exact(&mut buf).is_err() {
                         buf[0] = EOF;
                     }
                     self.mem[self.mem_ptr] = buf[0];
