@@ -22,7 +22,7 @@ impl Default for VM {
     fn default() -> Self {
         Self {
             mem: [0; MEMSIZE],
-            mem_ptr: 0,
+            mem_ptr: MEMSIZE / 2,
             pc: 0,
         }
     }
@@ -59,8 +59,7 @@ impl VM {
             }
             match program.bytecodes[self.pc] {
                 Inst::MOVPTR(v) => {
-                    // https://esolangs.org/wiki/Brainfuck#Memory
-                    self.mem_ptr = wrap(self.mem_ptr as isize + v, MEMSIZE);
+                    self.mem_ptr = check_memory_bound(self.mem_ptr as isize + v, MEMSIZE)?;
                 }
                 Inst::ADD(v) => {
                     self.mem[self.mem_ptr] = self.mem[self.mem_ptr].wrapping_add(v as u8);
@@ -69,14 +68,14 @@ impl VM {
                     self.mem[self.mem_ptr] = 0;
                 }
                 Inst::MULINTO(coef, offset) => {
-                    let mem_ptr_to = wrap(self.mem_ptr as isize + offset, MEMSIZE);
+                    let mem_ptr_to = check_memory_bound(self.mem_ptr as isize + offset, MEMSIZE)?;
                     self.mem[mem_ptr_to] = self.mem[mem_ptr_to]
                         .wrapping_add((coef * self.mem[self.mem_ptr] as isize) as u8);
                     self.mem[self.mem_ptr] = 0;
                 }
                 Inst::FINDZERO(offset) => {
                     while self.mem[self.mem_ptr] != 0 {
-                        self.mem_ptr = wrap(self.mem_ptr as isize + offset, MEMSIZE);
+                        self.mem_ptr = check_memory_bound(self.mem_ptr as isize + offset, MEMSIZE)?;
                     }
                 }
                 Inst::PUTC => {
@@ -113,22 +112,24 @@ impl VM {
 }
 
 #[inline(always)]
-fn wrap(v: isize, ceil: usize) -> usize {
-    if v < 0 {
-        return (v % ceil as isize + ceil as isize) as usize;
+fn check_memory_bound(v: isize, ceil: usize) -> Result<usize, RuntimeError> {
+    if v < 0 || ceil as isize <= v {
+        return Err(RuntimeError::MemoryOutofRange);
     }
-    if v >= ceil as isize {
-        return (v % ceil as isize) as usize;
-    }
-    v as usize
+    Ok(v as usize)
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum RuntimeError {}
+pub enum RuntimeError {
+    MemoryOutofRange,
+}
 
 impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "TODO")
+        use self::RuntimeError::*;
+        match self {
+            MemoryOutofRange => write!(f, "memory out of range"),
+        }
     }
 }
 

@@ -12,17 +12,17 @@ fn codegen(bytecodes: &[Inst]) -> Result<Vec<u8>, CogenError> {
     // TODO: mmapする領域に直書き
     let mut machine_codes = vec![];
 
-    let mut stack = vec![]; // TODO: loop用の構造をparse時点で作る
+    let mut stack_loop = vec![]; // TODO: loop用の構造をparse時点で作る
+    let mut jmp_abort = vec![];
 
-    // read_fn/write_fnを呼び出す際のレジスタ退避/復元の手間を省くため，以下のようにレジスタを固定する
+    // syscall|read_fn/write_fnを呼び出す際のレジスタ退避/復元の手間を省くため，以下のようにレジスタを固定する
     // TODO: r1*で機械語が(rdi, ... に比べて)大きくなることによる影響と，read|write_fn呼び出し時の諸々による影響の比較
 
     // r12: mem + mem_ptr
-    // r13: MEMSIZE
+    // r13: MEMSIZE - 1
     // r14: mem
-    // r15: mem + MEMSIZE (for optim)
+    // r15: abort
 
-    // ret-val(rax): mem_ptr
     for inst in bytecodes.iter() {
         match inst {
             Inst::MOVPTR(_v) => {
@@ -41,18 +41,15 @@ fn codegen(bytecodes: &[Inst]) -> Result<Vec<u8>, CogenError> {
                 }
 
                 // underflow / overflow
-                // TODO: macro
-                // xor rax, rax
-                // cmp r12, r15
-                // cmovg rax, r13
-                // neg rax
-                // cmp r12, r14
-                // cmovl rax, r13
-                // add r12, rax
+                // mov rax, r12
+                // sub rax, r14
+                // cmp rax, r13 ; 0 > mem_ptr/*rax*/ || MEMSIZE - 1/*r13*/ < mem_ptr/*rax*/
+                // jbe .abort_mem
                 machine_codes.extend_from_slice(&[
-                    0x48, 0x31, 0xC0, 0x4D, 0x39, 0xFC, 0x49, 0x0F, 0x4F, 0xC5, 0x48, 0xF7, 0xD8,
-                    0x4D, 0x39, 0xF4, 0x49, 0x0F, 0x4C, 0xC5, 0x49, 0x01, 0xC4,
+                    0x4C, 0x89, 0xE0, 0x4C, 0x29, 0xF0, 0x4C, 0x39, 0xE8, 0x0F, 0x87, 0xAF, 0xBE,
+                    0xAD, 0xDE,
                 ]);
+                jmp_abort.push(machine_codes.len());
             }
             Inst::ADD(v) => {
                 // addb [r12], #{v}
@@ -81,22 +78,21 @@ fn codegen(bytecodes: &[Inst]) -> Result<Vec<u8>, CogenError> {
                     machine_codes.extend_from_slice(&[0x49, 0x01, 0xC3]);
                 }
 
-                // xor rax, rax
-                // cmp r11, r15
-                // cmovg rax, r13
-                // neg rax
-                // cmp r11, r14
-                // cmovl rax, r13
-                // add r11, rax
+                // mov rax, r11
+                // sub rax, r14
+                // cmp rax, r13
+                // jbe .abort_mem
+                machine_codes.extend_from_slice(&[
+                    0x4C, 0x89, 0xD8, 0x4C, 0x29, 0xF0, 0x4C, 0x39, 0xE8, 0x0F, 0x87, 0xAF, 0xBE,
+                    0xAD, 0xDE,
+                ]);
+                jmp_abort.push(machine_codes.len());
+
                 // movzxb eax, [r12]
                 // imul eax, eax, #{coef}
                 // addb [r11], al
                 // movb [r12], 0
-                machine_codes.extend_from_slice(&[
-                    0x48, 0x31, 0xC0, 0x4D, 0x39, 0xFB, 0x49, 0x0F, 0x4F, 0xC5, 0x48, 0xF7, 0xD8,
-                    0x4D, 0x39, 0xF3, 0x49, 0x0F, 0x4C, 0xC5, 0x49, 0x01, 0xC3, 0x41, 0x0F, 0xB6,
-                    0x04, 0x24, 0x69, 0xC0,
-                ]);
+                machine_codes.extend_from_slice(&[0x41, 0x0F, 0xB6, 0x04, 0x24, 0x69, 0xC0]);
                 machine_codes.extend_from_slice(&(*coef as i32).to_le_bytes());
                 machine_codes.extend_from_slice(&[0x41, 0x00, 0x03, 0x41, 0xC6, 0x04, 0x24, 0x00]);
             }
@@ -107,33 +103,40 @@ fn codegen(bytecodes: &[Inst]) -> Result<Vec<u8>, CogenError> {
                     // cmpb [r12], 0x0
                     // je s1
                     // addq r12, #{v}
-                    // xor rax, rax
-                    // cmp r12, r15
-                    // cmovg rax, r13
-                    // neg rax
-                    // cmp r12, r14
-                    // cmovl rax, r13
-                    // add r12, rax
+                    // mov rax, r12
+                    // sub rax, r14
+                    // cmp rax, r13
+                    // jbe .abort_mem
                     // jmp s0
                     // s1:
                     machine_codes.extend_from_slice(&[
-                        0x41, 0x80, 0x3C, 0x24, 0x00, 0x74, 0x1D, 0x49, 0x83, 0xC4, v as u8, 0x48,
-                        0x31, 0xC0, 0x4D, 0x39, 0xFC, 0x49, 0x0F, 0x4F, 0xC5, 0x48, 0xF7, 0xD8,
-                        0x4D, 0x39, 0xF4, 0x49, 0x0F, 0x4C, 0xC5, 0x49, 0x01, 0xC4, 0xEB, 0xDC,
+                        0x41, 0x80, 0x3C, 0x24, 0x00, 0x74, 0x15, 0x49, 0x83, 0xC4, v as u8, 0x4C,
+                        0x89, 0xE0, 0x4C, 0x29, 0xF0, 0x4C, 0x39, 0xE8, 0x0F, 0x87, 0xAF, 0xBE,
+                        0xAD, 0xDE,
                     ]);
+                    jmp_abort.push(machine_codes.len());
+                    machine_codes.extend_from_slice(&[0xEB, 0xE4]);
                 } else {
-                    // ...
+                    // s0:
+                    // cmpb [r12], 0x0
+                    // je s1
                     // movabs rax, #{v}
                     // add r12, rax
-                    // ...
+                    // mov rax, r12
+                    // sub rax, r14
+                    // cmp rax, r13
+                    // jbe .abort_mem
+                    // jmp s0
+                    // s1:
                     machine_codes
-                        .extend_from_slice(&[0x41, 0x80, 0x3C, 0x24, 0x00, 0x74, 0x24, 0x48, 0xB8]);
+                        .extend_from_slice(&[0x41, 0x80, 0x3C, 0x24, 0x00, 0x74, 0x1E, 0x48, 0xB8]);
                     machine_codes.extend_from_slice(&(v.to_le_bytes()));
                     machine_codes.extend_from_slice(&[
-                        0x49, 0x01, 0xC4, 0x48, 0x31, 0xC0, 0x4D, 0x39, 0xFC, 0x49, 0x0F, 0x4F,
-                        0xC5, 0x48, 0xF7, 0xD8, 0x4D, 0x39, 0xF4, 0x49, 0x0F, 0x4C, 0xC5, 0x49,
-                        0x01, 0xC4, 0xEB, 0xD3,
+                        0x49, 0x01, 0xC4, 0x4C, 0x89, 0xE0, 0x4C, 0x29, 0xF0, 0x4C, 0x39, 0xE8,
+                        0x0F, 0x87, 0xAF, 0xBE, 0xAD, 0xDE,
                     ]);
+                    jmp_abort.push(machine_codes.len());
+                    machine_codes.extend_from_slice(&[0xEB, 0xDB]);
                 }
             }
             Inst::PUTC => {
@@ -169,15 +172,15 @@ fn codegen(bytecodes: &[Inst]) -> Result<Vec<u8>, CogenError> {
                 machine_codes.extend_from_slice(&[0x41, 0x80, 0x3C, 0x24, 0x00]);
 
                 // TODO: loop用の構造をbytecode生成時点で作る
-                stack.push(machine_codes.len());
+                stack_loop.push(machine_codes.len());
 
                 // je #{placeholder}
-                machine_codes.extend_from_slice(&[0x0F, 0x84, 0xde, 0xad, 0xbe, 0xaf]);
+                machine_codes.extend_from_slice(&[0x0F, 0x84, 0xAF, 0xBE, 0xAD, 0xDE]);
             }
             Inst::JNZ(_) => {
                 // cmpb [r12], 0x0
                 machine_codes.extend_from_slice(&[0x41, 0x80, 0x3C, 0x24, 0x00]);
-                let loop_start_offset = (stack.pop().unwrap() + 6) as u32;
+                let loop_start_offset = (stack_loop.pop().unwrap() + 6) as u32;
                 let loop_end_offset = (machine_codes.len() + 6) as u32;
 
                 // jne #{loop_start}
@@ -187,12 +190,12 @@ fn codegen(bytecodes: &[Inst]) -> Result<Vec<u8>, CogenError> {
                     &(loop_start_offset as i32 - loop_end_offset as i32).to_le_bytes(),
                 );
 
-                for (i, bt) in (loop_end_offset - loop_start_offset)
+                for (i, &bt) in (loop_end_offset - loop_start_offset)
                     .to_le_bytes()
                     .iter()
                     .enumerate()
                 {
-                    machine_codes[loop_start_offset as usize - 4 + i] = *bt;
+                    machine_codes[loop_start_offset as usize - 4 + i] = bt;
                 }
             }
         }
@@ -200,6 +203,40 @@ fn codegen(bytecodes: &[Inst]) -> Result<Vec<u8>, CogenError> {
 
     // ret
     machine_codes.push(0xc3);
+
+    let j_to = machine_codes.len();
+    for &j_from in jmp_abort.iter() {
+        for (i, &bt) in (j_to as u32 - j_from as u32)
+            .to_le_bytes()
+            .iter()
+            .enumerate()
+        {
+            machine_codes[j_from - 4 + i] = bt;
+        }
+    }
+
+    // .abort_mem:
+    // xor rdi, rdi
+    // sub rsp, 0x8 ; stack alignment
+    // call r15
+    machine_codes.extend_from_slice(&[0x48, 0x31, 0xFF, 0x48, 0x83, 0xEC, 0x08, 0x41, 0xFF, 0xD7]);
+
+    if cfg!(debug_assertions) {
+        let dump = || -> Result<(), std::io::Error> {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open("dump")?;
+            f.write_all(&machine_codes[..])?;
+            f.flush()?;
+            Ok(())
+        };
+        if let Err(e) = dump() {
+            eprintln!("Error(debug): {e}");
+        }
+    }
 
     Ok(machine_codes)
 }
@@ -257,6 +294,14 @@ impl MachineCodePage {
     }
 }
 
+unsafe extern "C" fn jit_abort(error_code: u8) {
+    match error_code {
+        0 => eprintln!("Error: memory out of range"),
+        _ => (),
+    }
+    std::process::exit(1);
+}
+
 pub struct JIT {
     pages: BTreeMap<usize, (usize, MachineCodePage)>,
 }
@@ -288,6 +333,8 @@ impl JIT {
         let mem_cur = mem_start + mem_ptr;
         let page_top_addr = pages[0].mem as usize;
 
+        let abort_addr = jit_abort as usize;
+
         asm!(
             "call {0}",
             "sub r12, r14",
@@ -296,9 +343,9 @@ impl JIT {
             out("rax") next_mem_ptr,
             out("r11") _,
             inout("r12") mem_cur => _,
-            inout("r13") MEMSIZE => _,
+            inout("r13") MEMSIZE - 1 => _,
             inout("r14") mem_start => _,
-            inout("r15") mem_end => _,
+            inout("r15") abort_addr => _,
             clobber_abi("C"), // TODO
         );
 
