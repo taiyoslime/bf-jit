@@ -212,7 +212,10 @@ mod tests {
     fn run_movev() {
         // "++++++++++>>[-]<<[->>+<<]"
         let bytecodes = vec![ADD(10), MOVPTR(2), SETZERO, MOVPTR(-2), MULINTO(1, 2)];
-        let mut vm = VM::new();
+        let mut vm = VM {
+            mem_ptr: 0,
+            ..Default::default()
+        };
         let _ = vm
             .run(
                 &Program { bytecodes },
@@ -242,25 +245,20 @@ mod tests {
     }
 
     #[test]
-    fn run_overflow_and_underflow() {
+    fn run_out_of_range() {
         let bytecodes = vec![
-            ADD(isize::MAX),
-            MOVPTR(MEMSIZE as isize * 128 + 1),
-            ADD(isize::MIN),
-            MOVPTR(MEMSIZE as isize * -24 - 2),
-            ADD(23098120392),
+            MOVPTR(MEMSIZE as isize),
         ];
         let mut vm = VM::new();
-        let _ = vm
+        let res = vm
             .run(
                 &Program { bytecodes },
                 &mut "".as_bytes(),
                 &mut vec![],
                 false,
-            )
-            .unwrap();
+            );
 
-        assert_eq!([vm.mem[0], vm.mem[1], vm.mem[MEMSIZE - 1]], [255, 0, 200]);
+        assert_eq!(Some(RuntimeError::MemoryOutofRange), res.err());
     }
 
     #[test]
@@ -274,7 +272,10 @@ mod tests {
             MOVPTR(-2),
             FINDZERO(1),
         ];
-        let mut vm = VM::new();
+        let mut vm = VM {
+            mem_ptr: 0,
+            ..Default::default()
+        };
         let _ = vm
             .run(
                 &Program { bytecodes },
