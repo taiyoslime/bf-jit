@@ -7,8 +7,14 @@ use std::collections::BTreeMap;
 
 use libc::c_void;
 
-// TODO: fn codegen<F: Fn()>(bytecodes: &[Inst], read_fn: F, write_fn: F) -> Result<Vec<u8>, CogenError> {
 fn codegen(bytecodes: &[Inst]) -> Result<Vec<u8>, CogenError> {
+    if !(cfg!(target_os = "linux") || cfg!(target_os = "macos")) {
+        return Err(CogenError::UnsupportedOS);
+    }
+    if !cfg!(target_arch = "x86_64") {
+        return Err(CogenError::UnsupportedArch);
+    }
+
     // TODO: mmapする領域に直書き
     let mut machine_codes = vec![];
 
@@ -142,29 +148,44 @@ fn codegen(bytecodes: &[Inst]) -> Result<Vec<u8>, CogenError> {
             Inst::PUTC => {
                 // TODO: とりあえず動かすためwrite直呼び
 
-                // mov rax, 0x1
+                if cfg!(target_os = "linux") {
+                    // mov rax, 0x1
+                    machine_codes.extend_from_slice(&[0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00]);
+                }
+                if cfg!(target_os = "macos") {
+                    // mov rax, 0x2000004
+                    machine_codes.extend_from_slice(&[0x48, 0xC7, 0xC0, 0x04, 0x00, 0x00, 0x02]);
+                }
+
                 // mov rdi, 0x1
                 // mov rsi, r12
                 // mov rdx, 0x1
                 // syscall
-
                 machine_codes.extend_from_slice(&[
-                    0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00, 0x48, 0xC7, 0xC7, 0x01, 0x00, 0x00,
-                    0x00, 0x4C, 0x89, 0xE6, 0x48, 0xC7, 0xC2, 0x01, 0x00, 0x00, 0x00, 0x0F, 0x05,
+                    0x48, 0xC7, 0xC7, 0x01, 0x00, 0x00, 0x00, 0x4C, 0x89, 0xE6, 0x48, 0xC7, 0xC2,
+                    0x01, 0x00, 0x00, 0x00, 0x0F, 0x05,
                 ]);
             }
             Inst::GETC => {
                 // TODO: とりあえず動かすためread直呼び
+
+                if cfg!(target_os = "linux") {
+                    // xor rax, rax
+                    machine_codes.extend_from_slice(&[0x48, 0x31, 0xC0]);
+                }
+                if cfg!(target_os = "macos") {
+                    // mov rax, 0x2000003
+                    machine_codes.extend_from_slice(&[0x48, 0xC7, 0xC0, 0x03, 0x00, 0x00, 0x02]);
+                }
 
                 // xor rax, rax
                 // xor rdi, rdi
                 // mov rsi, r12
                 // mov rdx, 0x1
                 // syscall
-
                 machine_codes.extend_from_slice(&[
-                    0x48, 0x31, 0xC0, 0x48, 0x31, 0xFF, 0x4C, 0x89, 0xE6, 0x48, 0xC7, 0xC2, 0x01,
-                    0x00, 0x00, 0x00, 0x0F, 0x05,
+                    0x48, 0x31, 0xFF, 0x4C, 0x89, 0xE6, 0x48, 0xC7, 0xC2, 0x01, 0x00, 0x00, 0x00,
+                    0x0F, 0x05,
                 ]);
             }
             Inst::JZ(_) => {
@@ -242,11 +263,18 @@ fn codegen(bytecodes: &[Inst]) -> Result<Vec<u8>, CogenError> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum CogenError {}
+pub enum CogenError {
+    UnsupportedArch,
+    UnsupportedOS,
+}
 
 impl fmt::Display for CogenError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "TODO")
+        use self::CogenError::*;
+        match self {
+            UnsupportedArch => write!(f, "target arch is not supported"),
+            UnsupportedOS => write!(f, "target os is not supported"),
+        }
     }
 }
 

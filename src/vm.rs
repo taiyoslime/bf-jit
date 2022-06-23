@@ -246,17 +246,14 @@ mod tests {
 
     #[test]
     fn run_out_of_range() {
-        let bytecodes = vec![
-            MOVPTR(MEMSIZE as isize),
-        ];
+        let bytecodes = vec![MOVPTR(MEMSIZE as isize)];
         let mut vm = VM::new();
-        let res = vm
-            .run(
-                &Program { bytecodes },
-                &mut "".as_bytes(),
-                &mut vec![],
-                false,
-            );
+        let res = vm.run(
+            &Program { bytecodes },
+            &mut "".as_bytes(),
+            &mut vec![],
+            false,
+        );
 
         assert_eq!(Some(RuntimeError::MemoryOutofRange), res.err());
     }
