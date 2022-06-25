@@ -5,7 +5,7 @@
 - 8-bit per cell (wrapping)
 - allowing negative memory access
 - tape size is fixed, abort when go out of range 
-- JIT compilation (WIP, only for x64 Linux and MacOS)
+- JIT compilation (WIP, only for x64)
 
 ## Build & Run
 
