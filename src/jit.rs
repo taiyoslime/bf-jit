@@ -1,4 +1,5 @@
 use crate::bytecode::Inst;
+use crate::vm::EOF;
 use crate::vm::MEMSIZE;
 use std::arch::asm;
 use std::{error, fmt, ptr};
@@ -21,13 +22,13 @@ fn codegen(bytecodes: &[Inst]) -> Result<Vec<u8>, CogenError> {
     let mut stack_loop = vec![]; // TODO: loop用の構造をparse時点で作る
     let mut jmp_abort = vec![];
 
-    // syscall|read_fn/write_fnを呼び出す際のレジスタ退避/復元の手間を省くため，以下のようにレジスタを固定する
-    // TODO: r1*で機械語が(rdi, ... に比べて)大きくなることによる影響と，read|write_fn呼び出し時の諸々による影響の比較
-
     // r12: mem + mem_ptr
     // r13: MEMSIZE - 1
     // r14: mem
     // r15: abort
+
+    //stack alignment(tmp)
+    machine_codes.extend_from_slice(&[0x48, 0x83, 0xEC, 0x08]);
 
     for inst in bytecodes.iter() {
         match inst {
@@ -146,46 +147,32 @@ fn codegen(bytecodes: &[Inst]) -> Result<Vec<u8>, CogenError> {
                 }
             }
             Inst::PUTC => {
-                // TODO: とりあえず動かすためwrite直呼び
+                // push rdi
+                // push rcx
+                // mov rsi, 1
+                // mov rdx, r12
+                // call rcx
+                // pop rcx
+                // pop rdi
 
-                if cfg!(target_os = "linux") {
-                    // mov rax, 0x1
-                    machine_codes.extend_from_slice(&[0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00]);
-                }
-                if cfg!(target_os = "macos") {
-                    // mov rax, 0x2000004
-                    machine_codes.extend_from_slice(&[0x48, 0xC7, 0xC0, 0x04, 0x00, 0x00, 0x02]);
-                }
-
-                // mov rdi, 0x1
-                // mov rsi, r12
-                // mov rdx, 0x1
-                // syscall
                 machine_codes.extend_from_slice(&[
-                    0x48, 0xC7, 0xC7, 0x01, 0x00, 0x00, 0x00, 0x4C, 0x89, 0xE6, 0x48, 0xC7, 0xC2,
-                    0x01, 0x00, 0x00, 0x00, 0x0F, 0x05,
+                    0x57, 0x51, 0x48, 0xC7, 0xC6, 0x01, 0x00, 0x00, 0x00, 0x4C, 0x89, 0xE2, 0xFF,
+                    0xD1, 0x59, 0x5F,
                 ]);
             }
             Inst::GETC => {
-                // TODO: とりあえず動かすためread直呼び
+                // push rdi
+                // push rcx
+                // mov rsi, 0
+                // mov rdx, r12
+                // call rcx
+                // movb [r12], al
+                // pop rcx
+                // pop rdi
 
-                if cfg!(target_os = "linux") {
-                    // xor rax, rax
-                    machine_codes.extend_from_slice(&[0x48, 0x31, 0xC0]);
-                }
-                if cfg!(target_os = "macos") {
-                    // mov rax, 0x2000003
-                    machine_codes.extend_from_slice(&[0x48, 0xC7, 0xC0, 0x03, 0x00, 0x00, 0x02]);
-                }
-
-                // xor rax, rax
-                // xor rdi, rdi
-                // mov rsi, r12
-                // mov rdx, 0x1
-                // syscall
                 machine_codes.extend_from_slice(&[
-                    0x48, 0x31, 0xFF, 0x4C, 0x89, 0xE6, 0x48, 0xC7, 0xC2, 0x01, 0x00, 0x00, 0x00,
-                    0x0F, 0x05,
+                    0x57, 0x51, 0x48, 0xC7, 0xC6, 0x00, 0x00, 0x00, 0x00, 0x4C, 0x89, 0xE2, 0xFF,
+                    0xD1, 0x41, 0x88, 0x04, 0x24, 0x59, 0x5F,
                 ]);
             }
             Inst::JZ(_) => {
@@ -222,8 +209,9 @@ fn codegen(bytecodes: &[Inst]) -> Result<Vec<u8>, CogenError> {
         }
     }
 
+    // add rsp, 0x8
     // ret
-    machine_codes.push(0xc3);
+    machine_codes.extend_from_slice(&[0x48, 0x83, 0xC4, 0x08, 0xc3]);
 
     let j_to = machine_codes.len();
     for &j_from in jmp_abort.iter() {
@@ -238,9 +226,8 @@ fn codegen(bytecodes: &[Inst]) -> Result<Vec<u8>, CogenError> {
 
     // .abort_mem:
     // xor rdi, rdi
-    // sub rsp, 0x8 ; stack alignment
     // call r15
-    machine_codes.extend_from_slice(&[0x48, 0x31, 0xFF, 0x48, 0x83, 0xEC, 0x08, 0x41, 0xFF, 0xD7]);
+    machine_codes.extend_from_slice(&[0x48, 0x31, 0xFF, 0x41, 0xFF, 0xD7]);
 
     if cfg!(debug_assertions) {
         let dump = || -> Result<(), std::io::Error> {
@@ -322,12 +309,21 @@ impl MachineCodePage {
     }
 }
 
-unsafe extern "C" fn jit_abort(error_code: u8) {
+extern "C" fn jit_abort(error_code: u8) {
     match error_code {
         0 => eprintln!("Error: memory out of range"),
         _ => (),
     }
     std::process::exit(1);
+}
+
+extern "C" fn jit_io(io: &mut IO, c: u8, buf: &mut u8) -> u8 {
+    if c == 0 {
+        return io.read();
+    } else if c == 1 {
+        io.write(buf);
+    }
+    return 0;
 }
 
 pub struct JIT {
@@ -362,12 +358,21 @@ impl JIT {
 
         let abort_addr = jit_abort as usize;
 
+        let mut io = IO {
+            writer: &mut std::io::stdout(),
+            reader: &mut std::io::stdin(),
+        };
+        let io_ptr = &mut io as *mut IO;
+        let jit_io_addr = jit_io as usize;
+
         asm!(
             "call {0}",
             "sub r12, r14",
             "mov rax, r12",
             in(reg) page_top_addr,
             out("rax") next_mem_ptr,
+            in("rdi") io_ptr,
+            in("rcx")  jit_io_addr,
             out("r11") _,
             inout("r12") mem_cur => _,
             inout("r13") MEMSIZE - 1 => _,
@@ -400,4 +405,35 @@ impl JIT {
     fn read_fn(&self) {}
 
     fn write_fn(&self) {}
+}
+
+/*
+struct TestIO<'a, R: 'a + std::io::Read, W: 'a + std::io::Write> {
+    writer: &'a mut W,
+    reader: &'a mut R,
+}
+*/
+// TODO
+struct IO<'a> {
+    writer: &'a mut std::io::Stdout,
+    reader: &'a mut std::io::Stdin,
+}
+
+impl IO<'_> {
+    fn read(&mut self) -> u8 {
+        use std::io::Read;
+        let mut buf: u8 = 0;
+        if self
+            .reader
+            .read_exact(std::slice::from_mut(&mut buf))
+            .is_err()
+        {
+            buf = EOF;
+        }
+        buf
+    }
+    fn write(&mut self, buf: &mut u8) {
+        use std::io::Write;
+        _ = self.writer.write(std::slice::from_mut(buf));
+    }
 }

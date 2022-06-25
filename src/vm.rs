@@ -6,7 +6,7 @@ use std::io;
 
 pub const MEMSIZE: usize = 100000;
 pub const JIT_EXEC_TH: u8 = 5;
-const EOF: u8 = 0;
+pub const EOF: u8 = 0;
 
 pub struct Program {
     pub bytecodes: Vec<Inst>,
@@ -40,7 +40,7 @@ impl VM {
         writer: &mut W,
         enable_jit: bool,
     ) -> Result<(), RuntimeError> {
-        let mut buf: [u8; 1] = [0]; // TODO
+        let mut buf: u8 = 0;
         let jit = jit::JIT::new();
 
         while self.pc < program.bytecodes.len() {
@@ -82,10 +82,12 @@ impl VM {
                     let _ = writer.write(&self.mem[self.mem_ptr..(self.mem_ptr + 1)]);
                 }
                 Inst::GETC => {
-                    if reader.read_exact(&mut buf).is_err() {
-                        buf[0] = EOF;
+                    if reader
+                        .read_exact(std::slice::from_mut(&mut self.mem[self.mem_ptr]))
+                        .is_err()
+                    {
+                        self.mem[self.mem_ptr] = EOF;
                     }
-                    self.mem[self.mem_ptr] = buf[0];
                 }
                 Inst::JZ(addr) => {
                     if self.mem[self.mem_ptr] == 0 {
