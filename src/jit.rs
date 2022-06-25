@@ -401,10 +401,6 @@ impl JIT {
         let page = MachineCodePage::new(&machine_codes);
         vec![page]
     }
-
-    fn read_fn(&self) {}
-
-    fn write_fn(&self) {}
 }
 
 /*

@@ -40,7 +40,6 @@ impl VM {
         writer: &mut W,
         enable_jit: bool,
     ) -> Result<(), RuntimeError> {
-        let mut buf: u8 = 0;
         let jit = jit::JIT::new();
 
         while self.pc < program.bytecodes.len() {
